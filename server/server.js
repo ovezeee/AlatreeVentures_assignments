@@ -11,7 +11,7 @@ dotenv.config();
 const app = express();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-// ✅ Fix: Ensure uploads directory exists
+// ✅ Ensure uploads directory exists
 const uploadsDir = path.join(process.cwd(), "uploads");
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
@@ -24,19 +24,17 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-// ✅ Allowed origins for CORS
-const allowedOrigins = [
-  "http://localhost:5173",
-  "https://alatree-ventures-assignments-cehr-av59bl81q-ovezeeees-projects.vercel.app",
-  "https://alatree-ventures-assignments-cehr-nr677mvdd-ovezeeees-projects.vercel.app",
-];
-
-// ✅ CORS middleware
+// ✅ CORS middleware (dynamic for localhost + vercel.app)
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  if (allowedOrigins.includes(origin)) {
+
+  if (
+    origin &&
+    (origin.includes("localhost") || origin.includes("vercel.app"))
+  ) {
     res.setHeader("Access-Control-Allow-Origin", origin);
   }
+
   res.setHeader(
     "Access-Control-Allow-Methods",
     "GET, POST, PUT, DELETE, PATCH, OPTIONS"
@@ -49,6 +47,7 @@ app.use((req, res, next) => {
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
+
   next();
 });
 
@@ -71,7 +70,7 @@ app.post(
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
-    // Handle the event
+    // Handle successful payment
     if (event.type === "payment_intent.succeeded") {
       const paymentIntent = event.data.object;
       console.log("💰 Payment succeeded:", paymentIntent.id);
@@ -81,7 +80,7 @@ app.post(
   }
 );
 
-// ✅ Apply JSON parser AFTER webhook
+// ✅ Apply JSON parsers AFTER webhook
 app.use(express.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
@@ -107,7 +106,7 @@ app.post("/api/upload", upload.single("file"), (req, res) => {
   res.json({ file: req.file });
 });
 
-// ✅ API: Test
+// ✅ API: Test route
 app.get("/api/hello", (req, res) => {
   res.json({ message: "Hello from backend 🚀" });
 });
@@ -115,7 +114,7 @@ app.get("/api/hello", (req, res) => {
 // ✅ Serve uploads folder
 app.use("/uploads", express.static(uploadsDir));
 
-// ✅ Start server (only in local dev, Vercel handles prod)
+// ✅ Start server in dev (Vercel will handle prod)
 if (process.env.NODE_ENV !== "production") {
   const PORT = process.env.PORT || 5000;
   app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
