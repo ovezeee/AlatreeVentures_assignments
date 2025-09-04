@@ -470,9 +470,20 @@ app.use((error, req, res, next) => {
   });
 });
 
+// Root route handler
+app.get('/', (req, res) => {
+  res.json({ 
+    message: 'Welcome to the Top216 Server!',
+    status: 'Server is running',
+    healthCheck: `http://localhost:${PORT}/api/health`,
+    testEntry: `http://localhost:${PORT}/api/create-test-entry/user_test123`
+  });
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
   console.log(`🧪 Create test entry: http://localhost:${PORT}/api/create-test-entry/user_test123`);
 });
+
