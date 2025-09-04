@@ -12,17 +12,26 @@ try {
   if (!process.env.STRIPE_SECRET_KEY) {
     console.error('ERROR: STRIPE_SECRET_KEY not found in environment variables');
     console.log('Please add STRIPE_SECRET_KEY to your .env file');
-    process.exit(1);
-  }
-  if (!process.env.STRIPE_SECRET_KEY.startsWith('sk_test_')) {
+    // Don't exit in production/serverless
+    if (process.env.NODE_ENV !== 'production') {
+      process.exit(1);
+    }
+  } else if (!process.env.STRIPE_SECRET_KEY.startsWith('sk_test_')) {
     console.error('ERROR: STRIPE_SECRET_KEY is not a test key. Please use a test key in test mode.');
-    process.exit(1);
+    // Don't exit in production/serverless
+    if (process.env.NODE_ENV !== 'production') {
+      process.exit(1);
+    }
+  } else {
+    stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+    console.log('✅ Stripe initialized successfully in test mode');
   }
-  stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-  console.log('✅ Stripe initialized successfully in test mode');
 } catch (error) {
   console.error('ERROR: Failed to initialize Stripe:', error.message);
-  process.exit(1);
+  // Don't exit in production/serverless
+  if (process.env.NODE_ENV !== 'production') {
+    process.exit(1);
+  }
 }
 
 const app = express();
@@ -62,16 +71,23 @@ const connectDB = async () => {
       useUnifiedTopology: true,
     });
     console.log('✅ MongoDB connected successfully');
+    console.log('📍 Database:', mongoose.connection.name);
   } catch (error) {
-    console.error('ERROR: MongoDB connection failed:', error.message);
+    console.error('❌ MongoDB connection failed:', error.message);
     console.log('Make sure MongoDB is running on your system');
-    process.exit(1);
+    // Don't exit in production/serverless
+    if (process.env.NODE_ENV !== 'production') {
+      process.exit(1);
+    }
   }
 };
 
 // Only connect to DB if not already connected (important for serverless)
 if (mongoose.connection.readyState === 0) {
+  console.log('🔄 Connecting to MongoDB...');
   connectDB();
+} else {
+  console.log('✅ MongoDB already connected');
 }
 
 // Entry Schema - Modified to store file as base64 or external URL
@@ -140,14 +156,74 @@ const calculateFees = (baseAmount) => {
   return { stripeFee, totalAmount };
 };
 
-// Routes
+// ROOT ROUTE - This fixes the "Cannot GET /" error
+app.get('/', (req, res) => {
+  res.json({
+    message: '🏆 Top 216 Competition API',
+    status: 'deployed and running',
+    timestamp: new Date().toISOString(),
+    version: '1.0.0',
+    endpoints: {
+      health: '/api/health',
+      status: '/api/status', 
+      createPaymentIntent: 'POST /api/create-payment-intent',
+      submitEntry: 'POST /api/entries',
+      getUserEntries: 'GET /api/entries/:userId',
+      getEntry: 'GET /api/entry/:id',
+      deleteEntry: 'DELETE /api/entries/:id',
+      downloadFile: 'GET /api/entries/:entryId/download',
+      testEntry: 'GET /api/create-test-entry/:userId',
+      webhook: 'POST /api/webhook'
+    },
+    vercelInfo: {
+      url: process.env.VERCEL_URL || 'localhost',
+      region: process.env.VERCEL_REGION || 'local',
+      env: process.env.VERCEL_ENV || 'development'
+    },
+    services: {
+      database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+      stripe: stripe ? 'configured' : 'not configured'
+    }
+  });
+});
+
+// Enhanced API Routes
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'OK', 
     message: 'Server is running',
     timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'development'
+    environment: process.env.NODE_ENV || 'development',
+    version: '1.0.0',
+    deployment: process.env.VERCEL_URL || 'localhost',
+    region: process.env.VERCEL_REGION || 'local',
+    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    stripe: stripe ? 'initialized' : 'not initialized'
   });
+});
+
+// Add deployment status endpoint
+app.get('/api/status', (req, res) => {
+  const status = {
+    server: 'running',
+    database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    stripe: stripe ? 'configured' : 'not configured',
+    environment: process.env.NODE_ENV || 'development',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    memory: process.memoryUsage(),
+    version: process.version
+  };
+
+  // Add environment variables check (without exposing secrets)
+  status.envCheck = {
+    MONGODB_URI: !!process.env.MONGODB_URI,
+    STRIPE_SECRET_KEY: !!process.env.STRIPE_SECRET_KEY,
+    STRIPE_WEBHOOK_SECRET: !!process.env.STRIPE_WEBHOOK_SECRET,
+    VERCEL_URL: !!process.env.VERCEL_URL
+  };
+
+  res.json(status);
 });
 
 app.get('/api/create-test-entry/:userId', async (req, res) => {
@@ -159,7 +235,7 @@ app.get('/api/create-test-entry/:userId', async (req, res) => {
       entryType: 'text',
       title: 'Sample Business Strategy Entry',
       description: 'A comprehensive business strategy for digital transformation in modern enterprises',
-      textContent: 'This is a detailed business strategy...'.repeat(50), // Make it longer to meet word count
+      textContent: 'This is a detailed business strategy focusing on digital transformation in modern enterprises. '.repeat(20), // Make it longer to meet word count
       entryFee: 49,
       stripeFee: 2,
       totalAmount: 51,
@@ -181,6 +257,10 @@ app.get('/api/create-test-entry/:userId', async (req, res) => {
 
 app.post('/api/create-payment-intent', async (req, res) => {
   try {
+    if (!stripe) {
+      return res.status(500).json({ error: 'Stripe not configured' });
+    }
+    
     console.log('Payment intent request received:', req.body);
     const { category, entryType } = req.body;
     if (!category || !entryType) {
@@ -251,6 +331,10 @@ app.post('/api/entries', upload.single('file'), async (req, res) => {
       if (req.file.size > 25 * 1024 * 1024) {
         return res.status(400).json({ error: 'File size exceeds 25MB limit.' });
       }
+    }
+
+    if (!stripe) {
+      return res.status(500).json({ error: 'Stripe not configured' });
     }
 
     console.log('Verifying payment intent:', paymentIntentId);
@@ -392,6 +476,10 @@ app.delete('/api/entries/:id', async (req, res) => {
 });
 
 app.post('/api/webhook', express.raw({ type: 'application/json' }), (req, res) => {
+  if (!stripe) {
+    return res.status(500).json({ error: 'Stripe not configured' });
+  }
+  
   const sig = req.headers['stripe-signature'];
   let event;
   try {
@@ -424,10 +512,15 @@ const PORT = process.env.PORT || 5000;
 // For local development
 if (process.env.NODE_ENV !== 'production') {
   app.listen(PORT, () => {
-    console.log(`🚀 Server running on port ${PORT}`);
-    console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
-    console.log(`🧪 Create test entry: http://localhost:${PORT}/api/create-test-entry/user_test123`);
+    console.log('🚀 Server running on port', PORT);
+    console.log('📊 Health check: http://localhost:' + PORT + '/api/health');
+    console.log('🧪 Create test entry: http://localhost:' + PORT + '/api/create-test-entry/user_test123');
   });
+} else {
+  console.log('🌐 Vercel serverless function initialized');
+  console.log('🔗 Deployment URL:', process.env.VERCEL_URL);
+  console.log('📍 Region:', process.env.VERCEL_REGION);
+  console.log('⚡ Environment:', process.env.VERCEL_ENV);
 }
 
 // Export for Vercel
