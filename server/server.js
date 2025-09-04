@@ -475,3 +475,6 @@ app.listen(PORT, () => {
   console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
   console.log(`🧪 Create test entry: http://localhost:${PORT}/api/create-test-entry/user_test123`);
 });
+
+module.exports = app;
+
