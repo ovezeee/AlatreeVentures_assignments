@@ -6,41 +6,43 @@ const path = require('path');
 const fs = require('fs');
 require('dotenv').config();
 
-// Initialize Stripe with error checking
+const app = express();
+
+// Initialize Stripe with graceful error handling
 let stripe;
 try {
   if (!process.env.STRIPE_SECRET_KEY) {
-    console.error('ERROR: STRIPE_SECRET_KEY not found in environment variables');
-    console.log('Please add STRIPE_SECRET_KEY to your .env file');
-    process.exit(1);
+    throw new Error('STRIPE_SECRET_KEY not found in environment variables. Please add it to Vercel environment variables.');
   }
   if (!process.env.STRIPE_SECRET_KEY.startsWith('sk_test_')) {
-    console.error('ERROR: STRIPE_SECRET_KEY is not a test key. Please use a test key in test mode.');
-    process.exit(1);
+    throw new Error('STRIPE_SECRET_KEY is not a test key. Please use a test key in test mode.');
   }
   stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
   console.log('✅ Stripe initialized successfully in test mode');
 } catch (error) {
   console.error('ERROR: Failed to initialize Stripe:', error.message);
-  process.exit(1);
+  // Instead of exiting, allow routes to handle Stripe unavailability
+  stripe = null;
 }
 
-const app = express();
-
-// Create uploads directory if it doesn't exist
-const uploadsDir = 'uploads';
+// Create uploads directory in /tmp for Vercel serverless compatibility
+const uploadsDir = '/tmp/uploads';
 if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir);
-  console.log('✅ Created uploads directory');
+  fs.mkdirSync(uploadsDir, { recursive: true });
+  console.log('✅ Created uploads directory in /tmp');
 }
 
 // Middleware
 app.use(cors());
 app.use(express.json());
-app.use('/uploads', express.static('uploads'));
+app.use('/uploads', express.static(uploadsDir));
 
-// MongoDB Connection with error handling
+// MongoDB Connection with connection reuse
 const connectDB = async () => {
+  if (mongoose.connection.readyState === 1) {
+    console.log('✅ Using existing MongoDB connection');
+    return;
+  }
   try {
     const mongoURI = process.env.MONGODB_URI || 'mongodb://localhost:27017/top216';
     await mongoose.connect(mongoURI, {
@@ -50,12 +52,9 @@ const connectDB = async () => {
     console.log('✅ MongoDB connected successfully');
   } catch (error) {
     console.error('ERROR: MongoDB connection failed:', error.message);
-    console.log('Make sure MongoDB is running on your system');
-    process.exit(1);
+    throw error; // Let the calling route handle the error
   }
 };
-
-connectDB();
 
 // Entry Schema
 const entrySchema = new mongoose.Schema({
@@ -113,10 +112,10 @@ const entrySchema = new mongoose.Schema({
 
 const Entry = mongoose.model('Entry', entrySchema);
 
-// File upload configuration
+// File upload configuration for /tmp directory
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, 'uploads/');
+    cb(null, '/tmp/uploads/');
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -161,6 +160,7 @@ app.get('/api/health', (req, res) => {
 
 app.get('/api/create-test-entry/:userId', async (req, res) => {
   try {
+    await connectDB();
     const userId = req.params.userId;
     const entry = new Entry({
       userId,
@@ -190,6 +190,7 @@ app.get('/api/create-test-entry/:userId', async (req, res) => {
 
 app.get('/api/create-test-entries/:userId', async (req, res) => {
   try {
+    await connectDB();
     const userId = req.params.userId;
     const testEntries = [
       {
@@ -212,7 +213,7 @@ app.get('/api/create-test-entries/:userId', async (req, res) => {
         entryType: 'pitch-deck',
         title: 'AI-Powered Solution Platform',
         description: 'Revolutionary AI application for enterprise automation',
-        fileUrl: '/uploads/sample-ai-deck.pdf',
+        fileUrl: '/tmp/uploads/sample-ai-deck.pdf',
         entryFee: 99,
         stripeFee: 4,
         totalAmount: 103,
@@ -249,6 +250,9 @@ app.get('/api/create-test-entries/:userId', async (req, res) => {
 
 app.post('/api/create-payment-intent', async (req, res) => {
   try {
+    if (!stripe) {
+      throw new Error('Stripe is not initialized. Check STRIPE_SECRET_KEY configuration.');
+    }
     console.log('Payment intent request received:', req.body);
     const { category, entryType } = req.body;
     if (!category || !entryType) {
@@ -287,6 +291,7 @@ app.post('/api/create-payment-intent', async (req, res) => {
 
 app.post('/api/entries', upload.single('file'), async (req, res) => {
   try {
+    await connectDB();
     console.log('Entry submission received:', {
       body: req.body,
       file: req.file ? { filename: req.file.filename, size: req.file.size } : null
@@ -320,6 +325,9 @@ app.post('/api/entries', upload.single('file'), async (req, res) => {
       }
     }
 
+    if (!stripe) {
+      throw new Error('Stripe is not initialized. Check STRIPE_SECRET_KEY configuration.');
+    }
     console.log('Verifying payment intent:', paymentIntentId);
     const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
     if (paymentIntent.status !== 'succeeded') {
@@ -345,8 +353,8 @@ app.post('/api/entries', upload.single('file'), async (req, res) => {
     };
     if (entryType === 'text') {
       entryData.textContent = textContent;
-    } else  if (entryType === 'pitch-deck' && req.file) {
-      entryData.fileUrl = `/uploads/${req.file.filename}`;
+    } else if (entryType === 'pitch-deck' && req.file) {
+      entryData.fileUrl = `/tmp/uploads/${req.file.filename}`;
     } else if (entryType === 'video') {
       entryData.videoUrl = videoUrl;
     }
@@ -367,6 +375,7 @@ app.post('/api/entries', upload.single('file'), async (req, res) => {
 
 app.get('/api/entries/:userId', async (req, res) => {
   try {
+    await connectDB();
     console.log('Fetching entries for user:', req.params.userId);
     const entries = await Entry.find({ userId: req.params.userId }).sort({ createdAt: -1 });
     console.log(`Found ${entries.length} entries for user:`, req.params.userId);
@@ -382,6 +391,7 @@ app.get('/api/entries/:userId', async (req, res) => {
 
 app.get('/api/entry/:id', async (req, res) => {
   try {
+    await connectDB();
     const entry = await Entry.findById(req.params.id);
     if (!entry) {
       return res.status(404).json({ error: 'Entry not found' });
@@ -398,6 +408,7 @@ app.get('/api/entry/:id', async (req, res) => {
 
 app.delete('/api/entries/:id', async (req, res) => {
   try {
+    await connectDB();
     const entryId = req.params.id;
     const { userId } = req.body;
     console.log('Deleting entry:', entryId, 'for user:', userId);
@@ -437,25 +448,33 @@ app.delete('/api/entries/:id', async (req, res) => {
   }
 });
 
-app.post('/api/webhook', express.raw({ type: 'application/json' }), (req, res) => {
+app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   const sig = req.headers['stripe-signature'];
-  let event;
   try {
-    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+    if (!process.env.STRIPE_WEBHOOK_SECRET) {
+      throw new Error('STRIPE_WEBHOOK_SECRET not configured');
+    }
+    if (!stripe) {
+      throw new Error('Stripe is not initialized');
+    }
+    const event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+    if (event.type === 'payment_intent.payment_failed') {
+      await connectDB();
+      const paymentIntent = event.data.object;
+      await Entry.findOneAndUpdate(
+        { paymentIntentId: paymentIntent.id },
+        { paymentStatus: 'failed' }
+      );
+      console.log('Updated payment status to failed for paymentIntent:', paymentIntent.id);
+    }
+    res.json({ received: true });
   } catch (err) {
-    console.log(`Webhook signature verification failed.`, err.message);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
+    console.error('Webhook error:', err.message);
+    res.status(400).json({ error: `Webhook Error: ${err.message}` });
   }
-  if (event.type === 'payment_intent.payment_failed') {
-    const paymentIntent = event.data.object;
-    Entry.findOneAndUpdate(
-      { paymentIntentId: paymentIntent.id },
-      { paymentStatus: 'failed' }
-    ).exec();
-  }
-  res.json({ received: true });
 });
 
+// Global error handler
 app.use((error, req, res, next) => {
   console.error('Unhandled error:', error);
   res.status(500).json({
@@ -471,3 +490,5 @@ app.listen(PORT, () => {
   console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
   console.log(`🧪 Create test entry: http://localhost:${PORT}/api/create-test-entry/user_test123`);
 });
+
+module.exports = app; // Export for Vercel
