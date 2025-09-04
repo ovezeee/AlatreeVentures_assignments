@@ -32,7 +32,15 @@ if (!fs.existsSync(uploadsDir)) {
 }
 
 // Middleware
-app.use(cors());
+app.use((req, res, next) => {
+  console.log(`Received ${req.method} request to ${req.url} from origin: ${req.headers.origin}`);
+  next();
+});
+app.use(cors({
+  origin: 'https://alatree-ventures-assignments-cehr-nr677mvdd-ovezeeees-projects.vercel.app',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 app.use('/uploads', express.static('/tmp/uploads')); // Serve files from /tmp/uploads
 
@@ -212,7 +220,7 @@ app.get('/api/create-test-entries/:userId', async (req, res) => {
         entryType: 'pitch-deck',
         title: 'AI-Powered Solution Platform',
         description: 'Revolutionary AI application for enterprise automation',
-        fileUrl: '/tmp/uploads/sample-ai-deck.pdf', // Updated path
+        fileUrl: '/tmp/uploads/sample-ai-deck.pdf',
         entryFee: 99,
         stripeFee: 4,
         totalAmount: 103,
@@ -346,7 +354,7 @@ app.post('/api/entries', upload.single('file'), async (req, res) => {
     if (entryType === 'text') {
       entryData.textContent = textContent;
     } else if (entryType === 'pitch-deck' && req.file) {
-      entryData.fileUrl = `/tmp/uploads/${req.file.filename}`; // Updated path
+      entryData.fileUrl = `/tmp/uploads/${req.file.filename}`;
     } else if (entryType === 'video') {
       entryData.videoUrl = videoUrl;
     }
@@ -412,7 +420,7 @@ app.delete('/api/entries/:id', async (req, res) => {
     }
     
     if (entry.entryType === 'pitch-deck' && entry.fileUrl) {
-      const filePath = path.join('/tmp/uploads', path.basename(entry.fileUrl)); // Updated path
+      const filePath = path.join('/tmp/uploads', path.basename(entry.fileUrl));
       try {
         if (fs.existsSync(filePath)) {
           fs.unlinkSync(filePath);
@@ -469,12 +477,4 @@ app.use((error, req, res, next) => {
   });
 });
 
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
-  console.log(`🧪 Create test entry: http://localhost:${PORT}/api/create-test-entry/user_test123`);
-});
-
 module.exports = app;
-
