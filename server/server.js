@@ -10,34 +10,31 @@ require('dotenv').config();
 let stripe;
 try {
   if (!process.env.STRIPE_SECRET_KEY) {
-    console.error('ERROR: STRIPE_SECRET_KEY not found in environment variables');
-    console.log('Please add STRIPE_SECRET_KEY to your .env file');
-    process.exit(1);
+    throw new Error('STRIPE_SECRET_KEY not found in environment variables. Please add it to your Vercel environment variables.');
   }
   if (!process.env.STRIPE_SECRET_KEY.startsWith('sk_test_')) {
-    console.error('ERROR: STRIPE_SECRET_KEY is not a test key. Please use a test key in test mode.');
-    process.exit(1);
+    throw new Error('STRIPE_SECRET_KEY is not a test key. Please use a test key in test mode.');
   }
   stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
   console.log('✅ Stripe initialized successfully in test mode');
 } catch (error) {
   console.error('ERROR: Failed to initialize Stripe:', error.message);
-  process.exit(1);
+  throw error; // Let Vercel handle and log the error
 }
 
 const app = express();
 
-// Create uploads directory if it doesn't exist
-const uploadsDir = 'uploads';
+// Create uploads directory in /tmp if it doesn't exist (Vercel-compatible)
+const uploadsDir = '/tmp/uploads';
 if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir);
-  console.log('✅ Created uploads directory');
+  fs.mkdirSync(uploadsDir, { recursive: true });
+  console.log('✅ Created uploads directory in /tmp');
 }
 
 // Middleware
 app.use(cors());
 app.use(express.json());
-app.use('/uploads', express.static('uploads'));
+app.use('/uploads', express.static('/tmp/uploads')); // Serve files from /tmp/uploads
 
 // MongoDB Connection with error handling
 const connectDB = async () => {
@@ -50,12 +47,15 @@ const connectDB = async () => {
     console.log('✅ MongoDB connected successfully');
   } catch (error) {
     console.error('ERROR: MongoDB connection failed:', error.message);
-    console.log('Make sure MongoDB is running on your system');
-    process.exit(1);
+    throw error; // Let Vercel handle and log the error
   }
 };
 
-connectDB();
+// Initialize DB connection
+connectDB().catch((error) => {
+  console.error('Failed to connect to MongoDB:', error.message);
+  // Continue running to allow health checks or other routes to respond
+});
 
 // Entry Schema
 const entrySchema = new mongoose.Schema({
@@ -116,7 +116,7 @@ const Entry = mongoose.model('Entry', entrySchema);
 // File upload configuration
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, 'uploads/');
+    cb(null, '/tmp/uploads/'); // Use /tmp for Vercel
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -183,7 +183,7 @@ app.get('/api/create-test-entry/:userId', async (req, res) => {
       title: entry.title 
     });
   } catch (error) {
-    console.error('Error creating test entry:', error);
+    console.error('Error creating test entry:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
@@ -212,7 +212,7 @@ app.get('/api/create-test-entries/:userId', async (req, res) => {
         entryType: 'pitch-deck',
         title: 'AI-Powered Solution Platform',
         description: 'Revolutionary AI application for enterprise automation',
-        fileUrl: '/uploads/sample-ai-deck.pdf',
+        fileUrl: '/tmp/uploads/sample-ai-deck.pdf', // Updated path
         entryFee: 99,
         stripeFee: 4,
         totalAmount: 103,
@@ -242,7 +242,7 @@ app.get('/api/create-test-entries/:userId', async (req, res) => {
       entries: savedEntries.map(e => ({ id: e._id, title: e.title, status: e.status }))
     });
   } catch (error) {
-    console.error('Error creating test entries:', error);
+    console.error('Error creating test entries:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
@@ -276,7 +276,7 @@ app.post('/api/create-payment-intent', async (req, res) => {
     console.log('Payment intent created successfully:', paymentIntent.id);
     res.json({ clientSecret: paymentIntent.client_secret, entryFee, stripeFee, totalAmount });
   } catch (error) {
-    console.error('Error creating payment intent:', error);
+    console.error('Error creating payment intent:', error.message);
     res.status(500).json({ 
       error: 'Failed to create payment intent',
       message: error.message,
@@ -345,8 +345,8 @@ app.post('/api/entries', upload.single('file'), async (req, res) => {
     };
     if (entryType === 'text') {
       entryData.textContent = textContent;
-    } else  if (entryType === 'pitch-deck' && req.file) {
-      entryData.fileUrl = `/uploads/${req.file.filename}`;
+    } else if (entryType === 'pitch-deck' && req.file) {
+      entryData.fileUrl = `/tmp/uploads/${req.file.filename}`; // Updated path
     } else if (entryType === 'video') {
       entryData.videoUrl = videoUrl;
     }
@@ -356,7 +356,7 @@ app.post('/api/entries', upload.single('file'), async (req, res) => {
     console.log('Entry created successfully:', entry._id);
     res.status(201).json({ message: 'Entry submitted successfully', entryId: entry._id });
   } catch (error) {
-    console.error('Error submitting entry:', error);
+    console.error('Error submitting entry:', error.message);
     res.status(500).json({ 
       error: 'Failed to submit entry',
       message: error.message,
@@ -372,7 +372,7 @@ app.get('/api/entries/:userId', async (req, res) => {
     console.log(`Found ${entries.length} entries for user:`, req.params.userId);
     res.json(entries);
   } catch (error) {
-    console.error('Error fetching entries:', error);
+    console.error('Error fetching entries:', error.message);
     res.status(500).json({ 
       error: 'Failed to fetch entries',
       message: error.message
@@ -388,7 +388,7 @@ app.get('/api/entry/:id', async (req, res) => {
     }
     res.json(entry);
   } catch (error) {
-    console.error('Error fetching entry:', error);
+    console.error('Error fetching entry:', error.message);
     res.status(500).json({ 
       error: 'Failed to fetch entry',
       message: error.message
@@ -412,7 +412,7 @@ app.delete('/api/entries/:id', async (req, res) => {
     }
     
     if (entry.entryType === 'pitch-deck' && entry.fileUrl) {
-      const filePath = path.join(__dirname, entry.fileUrl);
+      const filePath = path.join('/tmp/uploads', path.basename(entry.fileUrl)); // Updated path
       try {
         if (fs.existsSync(filePath)) {
           fs.unlinkSync(filePath);
@@ -428,7 +428,7 @@ app.delete('/api/entries/:id', async (req, res) => {
     
     res.json({ message: 'Entry deleted successfully' });
   } catch (error) {
-    console.error('Error deleting entry:', error);
+    console.error('Error deleting entry:', error.message);
     res.status(500).json({ 
       error: 'Failed to delete entry',
       message: error.message,
@@ -441,10 +441,13 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), (req, res) =
   const sig = req.headers['stripe-signature'];
   let event;
   try {
+    if (!process.env.STRIPE_WEBHOOK_SECRET) {
+      throw new Error('STRIPE_WEBHOOK_SECRET not found in environment variables');
+    }
     event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
   } catch (err) {
-    console.log(`Webhook signature verification failed.`, err.message);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
+    console.error('Webhook signature verification failed:', err.message);
+    return res.status(400).json({ error: `Webhook Error: ${err.message}` });
   }
   if (event.type === 'payment_intent.payment_failed') {
     const paymentIntent = event.data.object;
@@ -456,8 +459,9 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), (req, res) =
   res.json({ received: true });
 });
 
+// Global error handler
 app.use((error, req, res, next) => {
-  console.error('Unhandled error:', error);
+  console.error('Unhandled error:', error.message);
   res.status(500).json({
     error: 'Internal server error',
     message: error.message,
