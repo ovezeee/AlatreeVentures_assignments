@@ -1,4 +1,3 @@
-
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -32,8 +31,39 @@ if (!fs.existsSync(uploadsDir)) {
   console.log('✅ Created uploads directory in /tmp');
 }
 
+// CORS Configuration - Fixed for Vercel deployments
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow requests with no origin (mobile apps, Postman, etc.)
+    if (!origin) return callback(null, true);
+    
+    // Allow any Vercel app URLs and localhost
+    const allowedOrigins = [
+      /^https:\/\/.*\.vercel\.app$/,  // Any Vercel deployment
+      /^http:\/\/localhost:\d+$/,     // Local development
+      /^https:\/\/localhost:\d+$/     // Local HTTPS
+    ];
+    
+    const isAllowed = allowedOrigins.some(pattern => pattern.test(origin));
+    if (isAllowed) {
+      callback(null, true);
+    } else {
+      console.log('CORS blocked origin:', origin);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,  // Allow cookies/auth headers
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'stripe-signature']
+};
+
+// Apply CORS middleware
+app.use(cors(corsOptions));
+
+// Handle preflight requests
+app.options('*', cors(corsOptions));
+
 // Middleware
-app.use(cors());
 app.use(express.json());
 app.use('/uploads', express.static('/tmp/uploads')); // Serve files from /tmp/uploads
 
@@ -474,8 +504,8 @@ app.get('/', (req, res) => {
   res.json({ 
     message: 'Welcome to the Top216 Server!',
     status: 'Server is running',
-    healthCheck: `http://localhost:${PORT}/api/health`,
-    testEntry: `http://localhost:${PORT}/api/create-test-entry/user_test123`
+    healthCheck: `/api/health`,
+    testEntry: `/api/create-test-entry/user_test123`
   });
 });
 
