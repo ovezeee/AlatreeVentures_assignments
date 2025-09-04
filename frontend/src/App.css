@@ -1,0 +1,36 @@
+
+
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Ensure WCAG AA contrast and focus rings */
+input:focus, select:focus, textarea:focus, button:focus {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+}
+
+/* Custom styles for buttons */
+button {
+  transition: all 0.2s ease-in-out;
+}
+
+/* Ensure scrollbars are visible and accessible */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
