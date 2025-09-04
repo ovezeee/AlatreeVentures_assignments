@@ -27,17 +27,31 @@ try {
 
 const app = express();
 
-// Create uploads directory if it doesn't exist
-const uploadsDir = 'uploads';
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir);
-  console.log('✅ Created uploads directory');
-}
-
 // Middleware
 app.use(cors());
 app.use(express.json());
-app.use('/uploads', express.static('uploads'));
+
+// For Vercel, we'll use memory storage instead of disk storage
+const storage = multer.memoryStorage();
+
+const fileFilter = (req, file, cb) => {
+  const allowedTypes = {
+    'application/pdf': '.pdf',
+    'application/vnd.ms-powerpoint': '.ppt',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation': '.pptx'
+  };
+  if (allowedTypes[file.mimetype]) {
+    cb(null, true);
+  } else {
+    cb(new Error('Invalid file type. Only PDF and PPT files are allowed.'), false);
+  }
+};
+
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB limit
+  fileFilter: fileFilter
+});
 
 // MongoDB Connection with error handling
 const connectDB = async () => {
@@ -55,9 +69,12 @@ const connectDB = async () => {
   }
 };
 
-connectDB();
+// Only connect to DB if not already connected (important for serverless)
+if (mongoose.connection.readyState === 0) {
+  connectDB();
+}
 
-// Entry Schema
+// Entry Schema - Modified to store file as base64 or external URL
 const entrySchema = new mongoose.Schema({
   userId: { type: String, required: true },
   category: { type: String, required: true, enum: ['business', 'creative', 'technology', 'social-impact'] },
@@ -77,8 +94,9 @@ const entrySchema = new mongoose.Schema({
       message: 'Text entries must be between 100-2000 words'
     }
   },
-  fileUrl: {
-    type: String,
+  // Store file data directly in MongoDB for Vercel compatibility
+  fileData: {
+    type: String, // Base64 encoded file data
     validate: {
       validator: function (v) {
         if (this.entryType === 'pitch-deck') {
@@ -86,9 +104,11 @@ const entrySchema = new mongoose.Schema({
         }
         return true;
       },
-      message: 'File URL required for pitch deck entries'
+      message: 'File data required for pitch deck entries'
     }
   },
+  fileName: { type: String }, // Original filename
+  fileType: { type: String }, // File mimetype
   videoUrl: {
     type: String,
     validate: {
@@ -113,36 +133,6 @@ const entrySchema = new mongoose.Schema({
 
 const Entry = mongoose.model('Entry', entrySchema);
 
-// File upload configuration
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, 'uploads/');
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
-  }
-});
-
-const fileFilter = (req, file, cb) => {
-  const allowedTypes = {
-    'application/pdf': '.pdf',
-    'application/vnd.ms-powerpoint': '.ppt',
-    'application/vnd.openxmlformats-officedocument.presentationml.presentation': '.pptx'
-  };
-  if (allowedTypes[file.mimetype]) {
-    cb(null, true);
-  } else {
-    cb(new Error('Invalid file type. Only PDF and PPT files are allowed.'), false);
-  }
-};
-
-const upload = multer({
-  storage: storage,
-  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB limit
-  fileFilter: fileFilter
-});
-
 // Helper function to calculate fees
 const calculateFees = (baseAmount) => {
   const stripeFee = Math.ceil(baseAmount * 0.04); // 4% fee, rounded up
@@ -155,7 +145,8 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'OK', 
     message: 'Server is running',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development'
   });
 });
 
@@ -168,7 +159,7 @@ app.get('/api/create-test-entry/:userId', async (req, res) => {
       entryType: 'text',
       title: 'Sample Business Strategy Entry',
       description: 'A comprehensive business strategy for digital transformation in modern enterprises',
-      textContent: 'This is a detailed business strategy...'.repeat(3),
+      textContent: 'This is a detailed business strategy...'.repeat(50), // Make it longer to meet word count
       entryFee: 49,
       stripeFee: 2,
       totalAmount: 51,
@@ -184,65 +175,6 @@ app.get('/api/create-test-entry/:userId', async (req, res) => {
     });
   } catch (error) {
     console.error('Error creating test entry:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/api/create-test-entries/:userId', async (req, res) => {
-  try {
-    const userId = req.params.userId;
-    const testEntries = [
-      {
-        userId,
-        category: 'business',
-        entryType: 'text',
-        title: 'Innovative Business Strategy',
-        description: 'A comprehensive business strategy for modern markets',
-        textContent: 'This business strategy focuses on digital transformation...'.repeat(4),
-        entryFee: 49,
-        stripeFee: 2,
-        totalAmount: 51,
-        paymentIntentId: 'pi_test_business_' + Date.now(),
-        paymentStatus: 'succeeded',
-        status: 'submitted'
-      },
-      {
-        userId,
-        category: 'technology',
-        entryType: 'pitch-deck',
-        title: 'AI-Powered Solution Platform',
-        description: 'Revolutionary AI application for enterprise automation',
-        fileUrl: '/uploads/sample-ai-deck.pdf',
-        entryFee: 99,
-        stripeFee: 4,
-        totalAmount: 103,
-        paymentIntentId: 'pi_test_tech_' + Date.now(),
-        paymentStatus: 'succeeded',
-        status: 'under-review'
-      },
-      {
-        userId,
-        category: 'creative',
-        entryType: 'video',
-        title: 'Creative Digital Showcase',
-        description: 'Artistic expression through innovative digital media',
-        videoUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
-        entryFee: 49,
-        stripeFee: 2,
-        totalAmount: 51,
-        paymentIntentId: 'pi_test_creative_' + Date.now(),
-        paymentStatus: 'succeeded',
-        status: 'finalist'
-      }
-    ];
-    const savedEntries = await Entry.insertMany(testEntries);
-    console.log(`Created ${savedEntries.length} test entries for user: ${userId}`);
-    res.json({ 
-      message: `Created ${savedEntries.length} test entries successfully`,
-      entries: savedEntries.map(e => ({ id: e._id, title: e.title, status: e.status }))
-    });
-  } catch (error) {
-    console.error('Error creating test entries:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -285,11 +217,12 @@ app.post('/api/create-payment-intent', async (req, res) => {
   }
 });
 
+// Modified entries endpoint to handle file uploads in memory
 app.post('/api/entries', upload.single('file'), async (req, res) => {
   try {
     console.log('Entry submission received:', {
       body: req.body,
-      file: req.file ? { filename: req.file.filename, size: req.file.size } : null
+      file: req.file ? { filename: req.file.originalname, size: req.file.size } : null
     });
     const { userId, category, entryType, title, description, textContent, videoUrl, paymentIntentId } = req.body;
     
@@ -328,9 +261,11 @@ app.post('/api/entries', upload.single('file'), async (req, res) => {
         paymentStatus: paymentIntent.status
       });
     }
+
     const entryFee = parseInt(paymentIntent.metadata.entryFee);
     const stripeFee = parseInt(paymentIntent.metadata.stripeFee);
     const totalAmount = entryFee + stripeFee;
+
     const entryData = {
       userId,
       category,
@@ -343,17 +278,23 @@ app.post('/api/entries', upload.single('file'), async (req, res) => {
       paymentIntentId,
       paymentStatus: 'succeeded'
     };
+
     if (entryType === 'text') {
       entryData.textContent = textContent;
-    } else  if (entryType === 'pitch-deck' && req.file) {
-      entryData.fileUrl = `/uploads/${req.file.filename}`;
+    } else if (entryType === 'pitch-deck' && req.file) {
+      // Store file as base64 in MongoDB for Vercel compatibility
+      entryData.fileData = req.file.buffer.toString('base64');
+      entryData.fileName = req.file.originalname;
+      entryData.fileType = req.file.mimetype;
     } else if (entryType === 'video') {
       entryData.videoUrl = videoUrl;
     }
-    console.log('Creating entry with data:', entryData);
+
+    console.log('Creating entry with data:', { ...entryData, fileData: entryData.fileData ? '[BASE64_DATA]' : undefined });
     const entry = new Entry(entryData);
     await entry.save();
     console.log('Entry created successfully:', entry._id);
+    
     res.status(201).json({ message: 'Entry submitted successfully', entryId: entry._id });
   } catch (error) {
     console.error('Error submitting entry:', error);
@@ -365,10 +306,35 @@ app.post('/api/entries', upload.single('file'), async (req, res) => {
   }
 });
 
+// Add endpoint to download files
+app.get('/api/entries/:entryId/download', async (req, res) => {
+  try {
+    const entry = await Entry.findById(req.params.entryId);
+    if (!entry || !entry.fileData) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+    
+    const fileBuffer = Buffer.from(entry.fileData, 'base64');
+    
+    res.set({
+      'Content-Type': entry.fileType || 'application/octet-stream',
+      'Content-Disposition': `attachment; filename="${entry.fileName || 'file'}"`,
+      'Content-Length': fileBuffer.length
+    });
+    
+    res.send(fileBuffer);
+  } catch (error) {
+    console.error('Error downloading file:', error);
+    res.status(500).json({ error: 'Failed to download file' });
+  }
+});
+
 app.get('/api/entries/:userId', async (req, res) => {
   try {
     console.log('Fetching entries for user:', req.params.userId);
-    const entries = await Entry.find({ userId: req.params.userId }).sort({ createdAt: -1 });
+    const entries = await Entry.find({ userId: req.params.userId })
+      .select('-fileData') // Don't return file data in list view
+      .sort({ createdAt: -1 });
     console.log(`Found ${entries.length} entries for user:`, req.params.userId);
     res.json(entries);
   } catch (error) {
@@ -382,7 +348,7 @@ app.get('/api/entries/:userId', async (req, res) => {
 
 app.get('/api/entry/:id', async (req, res) => {
   try {
-    const entry = await Entry.findById(req.params.id);
+    const entry = await Entry.findById(req.params.id).select('-fileData'); // Don't return file data
     if (!entry) {
       return res.status(404).json({ error: 'Entry not found' });
     }
@@ -409,18 +375,6 @@ app.delete('/api/entries/:id', async (req, res) => {
     
     if (entry.userId !== userId) {
       return res.status(403).json({ error: 'Not authorized to delete this entry' });
-    }
-    
-    if (entry.entryType === 'pitch-deck' && entry.fileUrl) {
-      const filePath = path.join(__dirname, entry.fileUrl);
-      try {
-        if (fs.existsSync(filePath)) {
-          fs.unlinkSync(filePath);
-          console.log('Deleted file:', filePath);
-        }
-      } catch (fileError) {
-        console.error('Error deleting file:', fileError.message);
-      }
     }
     
     await Entry.findByIdAndDelete(entryId);
@@ -466,8 +420,15 @@ app.use((error, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
-  console.log(`🧪 Create test entry: http://localhost:${PORT}/api/create-test-entry/user_test123`);
-});
+
+// For local development
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
+    console.log(`🧪 Create test entry: http://localhost:${PORT}/api/create-test-entry/user_test123`);
+  });
+}
+
+// Export for Vercel
+module.exports = app;
