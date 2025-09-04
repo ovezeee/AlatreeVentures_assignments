@@ -33,7 +33,17 @@ if (!fs.existsSync(uploadsDir)) {
 }
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: [
+    "http://localhost:5173", // for local dev (Vite)
+    "http://localhost:3000", // for CRA/Next.js local dev
+    "https://alatree-ventures-assignments-6eo7.vercel.app" // your deployed frontend
+  ],
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: true
+}));
+
 app.use(express.json());
 app.use('/uploads', express.static('/tmp/uploads')); // Serve files from /tmp/uploads
 
@@ -486,4 +496,5 @@ app.listen(PORT, () => {
   console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
   console.log(`🧪 Create test entry: http://localhost:${PORT}/api/create-test-entry/user_test123`);
 });
+
 
