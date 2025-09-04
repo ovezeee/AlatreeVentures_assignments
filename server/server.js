@@ -8,24 +8,23 @@ require('dotenv').config();
 
 const app = express();
 
-// Initialize Stripe with graceful error handling
+// Initialize Stripe with fallback
 let stripe;
 try {
   if (!process.env.STRIPE_SECRET_KEY) {
-    throw new Error('STRIPE_SECRET_KEY not found in environment variables. Please add it to Vercel environment variables.');
+    throw new Error('STRIPE_SECRET_KEY not found in environment variables');
   }
   if (!process.env.STRIPE_SECRET_KEY.startsWith('sk_test_')) {
-    throw new Error('STRIPE_SECRET_KEY is not a test key. Please use a test key in test mode.');
+    throw new Error('STRIPE_SECRET_KEY is not a test key');
   }
   stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
   console.log('✅ Stripe initialized successfully in test mode');
 } catch (error) {
   console.error('ERROR: Failed to initialize Stripe:', error.message);
-  // Instead of exiting, allow routes to handle Stripe unavailability
-  stripe = null;
+  stripe = null; // Allow routes to handle Stripe unavailability
 }
 
-// Create uploads directory in /tmp for Vercel serverless compatibility
+// Create uploads directory in /tmp
 const uploadsDir = '/tmp/uploads';
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
@@ -37,7 +36,7 @@ app.use(cors());
 app.use(express.json());
 app.use('/uploads', express.static(uploadsDir));
 
-// MongoDB Connection with connection reuse
+// MongoDB Connection with retry logic
 const connectDB = async () => {
   if (mongoose.connection.readyState === 1) {
     console.log('✅ Using existing MongoDB connection');
@@ -48,15 +47,17 @@ const connectDB = async () => {
     await mongoose.connect(mongoURI, {
       useNewUrlParser: true,
       useUnifiedTopology: true,
+      serverSelectionTimeoutMS: 5000, // 5s timeout
+      maxPoolSize: 10, // Limit connection pool
     });
     console.log('✅ MongoDB connected successfully');
   } catch (error) {
     console.error('ERROR: MongoDB connection failed:', error.message);
-    throw error; // Let the calling route handle the error
+    throw new Error(`MongoDB connection failed: ${error.message}`);
   }
 };
 
-// Entry Schema
+// Entry Schema (unchanged)
 const entrySchema = new mongoose.Schema({
   userId: { type: String, required: true },
   category: { type: String, required: true, enum: ['business', 'creative', 'technology', 'social-impact'] },
@@ -112,7 +113,7 @@ const entrySchema = new mongoose.Schema({
 
 const Entry = mongoose.model('Entry', entrySchema);
 
-// File upload configuration for /tmp directory
+// File upload configuration
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, '/tmp/uploads/');
@@ -150,12 +151,21 @@ const calculateFees = (baseAmount) => {
 };
 
 // Routes
-app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'OK', 
-    message: 'Server is running',
-    timestamp: new Date().toISOString()
-  });
+app.get('/api/health', async (req, res) => {
+  try {
+    const status = {
+      status: 'OK',
+      message: 'Server is running',
+      timestamp: new Date().toISOString(),
+      stripeInitialized: !!stripe,
+      mongoConnected: mongoose.connection.readyState === 1
+    };
+    console.log('Health check:', status);
+    res.json(status);
+  } catch (error) {
+    console.error('Health check error:', error.message);
+    res.status(500).json({ error: 'Health check failed', message: error.message });
+  }
 });
 
 app.get('/api/create-test-entry/:userId', async (req, res) => {
@@ -183,8 +193,8 @@ app.get('/api/create-test-entry/:userId', async (req, res) => {
       title: entry.title 
     });
   } catch (error) {
-    console.error('Error creating test entry:', error);
-    res.status(500).json({ error: error.message });
+    console.error('Error creating test entry:', error.message);
+    res.status(500).json({ error: 'Failed to create test entry', message: error.message });
   }
 });
 
@@ -243,8 +253,8 @@ app.get('/api/create-test-entries/:userId', async (req, res) => {
       entries: savedEntries.map(e => ({ id: e._id, title: e.title, status: e.status }))
     });
   } catch (error) {
-    console.error('Error creating test entries:', error);
-    res.status(500).json({ error: error.message });
+    console.error('Error creating test entries:', error.message);
+    res.status(500).json({ error: 'Failed to create test entries', message: error.message });
   }
 });
 
@@ -280,7 +290,7 @@ app.post('/api/create-payment-intent', async (req, res) => {
     console.log('Payment intent created successfully:', paymentIntent.id);
     res.json({ clientSecret: paymentIntent.client_secret, entryFee, stripeFee, totalAmount });
   } catch (error) {
-    console.error('Error creating payment intent:', error);
+    console.error('Error creating payment intent:', error.message);
     res.status(500).json({ 
       error: 'Failed to create payment intent',
       message: error.message,
@@ -364,7 +374,7 @@ app.post('/api/entries', upload.single('file'), async (req, res) => {
     console.log('Entry created successfully:', entry._id);
     res.status(201).json({ message: 'Entry submitted successfully', entryId: entry._id });
   } catch (error) {
-    console.error('Error submitting entry:', error);
+    console.error('Error submitting entry:', error.message);
     res.status(500).json({ 
       error: 'Failed to submit entry',
       message: error.message,
@@ -381,7 +391,7 @@ app.get('/api/entries/:userId', async (req, res) => {
     console.log(`Found ${entries.length} entries for user:`, req.params.userId);
     res.json(entries);
   } catch (error) {
-    console.error('Error fetching entries:', error);
+    console.error('Error fetching entries:', error.message);
     res.status(500).json({ 
       error: 'Failed to fetch entries',
       message: error.message
@@ -398,7 +408,7 @@ app.get('/api/entry/:id', async (req, res) => {
     }
     res.json(entry);
   } catch (error) {
-    console.error('Error fetching entry:', error);
+    console.error('Error fetching entry:', error.message);
     res.status(500).json({ 
       error: 'Failed to fetch entry',
       message: error.message
@@ -423,7 +433,7 @@ app.delete('/api/entries/:id', async (req, res) => {
     }
     
     if (entry.entryType === 'pitch-deck' && entry.fileUrl) {
-      const filePath = path.join(__dirname, entry.fileUrl);
+      const filePath = path.join(entry.fileUrl);
       try {
         if (fs.existsSync(filePath)) {
           fs.unlinkSync(filePath);
@@ -431,6 +441,7 @@ app.delete('/api/entries/:id', async (req, res) => {
         }
       } catch (fileError) {
         console.error('Error deleting file:', fileError.message);
+        // Continue with deletion even if file removal fails
       }
     }
     
@@ -439,7 +450,7 @@ app.delete('/api/entries/:id', async (req, res) => {
     
     res.json({ message: 'Entry deleted successfully' });
   } catch (error) {
-    console.error('Error deleting entry:', error);
+    console.error('Error deleting entry:', error.message);
     res.status(500).json({ 
       error: 'Failed to delete entry',
       message: error.message,
@@ -476,19 +487,12 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, 
 
 // Global error handler
 app.use((error, req, res, next) => {
-  console.error('Unhandled error:', error);
+  console.error('Unhandled error:', error.message);
   res.status(500).json({
     error: 'Internal server error',
     message: error.message,
     stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
   });
-});
-
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
-  console.log(`🧪 Create test entry: http://localhost:${PORT}/api/create-test-entry/user_test123`);
 });
 
 module.exports = app; // Export for Vercel
