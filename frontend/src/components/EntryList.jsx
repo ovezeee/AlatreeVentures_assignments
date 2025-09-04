@@ -146,7 +146,7 @@ const EntryList = ({ userId }) => {
               <div className="mb-4">
                 <h3 className="font-medium text-gray-700 mb-2">Pitch Deck</h3>
                 <a
-                  href={`${API_BASE_URL}${entry.fileUrl}`}
+                  href= {API_BASE_URL + entry.fileUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -350,3 +350,4 @@ const EntryList = ({ userId }) => {
 };
 
 export default EntryList;
+
