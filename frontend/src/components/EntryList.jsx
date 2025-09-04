@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
@@ -10,24 +9,32 @@ const EntryList = ({ userId }) => {
   const [error, setError] = useState('');
 
   useEffect(() => {
+    console.log('EntryList using API_BASE_URL:', API_BASE_URL);
     fetchEntries();
   }, [userId]);
 
   const fetchEntries = async () => {
     try {
       setLoading(true);
+      const apiUrl = `${API_BASE_URL}/api/entries/${userId}`;
+      console.log('Fetching entries from:', apiUrl);
       console.log('Fetching entries for userId:', userId);
-      const response = await fetch(`${API_BASE_URL}/api/entries/${userId}`);
+      
+      const response = await fetch(apiUrl);
+      
       if (!response.ok) {
-        throw new Error('Failed to fetch entries');
+        const errorText = await response.text();
+        console.error('Fetch entries response error:', errorText);
+        throw new Error(`Failed to fetch entries: ${response.status} ${response.statusText}`);
       }
+      
       const data = await response.json();
       console.log('Fetched entries:', data);
       setEntries(data);
       setError('');
     } catch (error) {
       console.error('Error fetching entries:', error);
-      setError('Failed to load entries. Please try again.');
+      setError('Failed to load entries: ' + error.message);
     } finally {
       setLoading(false);
     }
@@ -39,15 +46,20 @@ const EntryList = ({ userId }) => {
     }
     try {
       setLoading(true);
-      const response = await fetch(`${API_BASE_URL}/api/entries/${entryId}`, {
+      const apiUrl = `${API_BASE_URL}/api/entries/${entryId}`;
+      console.log('Deleting entry at:', apiUrl);
+      
+      const response = await fetch(apiUrl, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId })
       });
+      
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || 'Failed to delete entry');
       }
+      
       setEntries(entries.filter(entry => entry._id !== entryId));
       setError('');
     } catch (error) {
@@ -92,8 +104,9 @@ const EntryList = ({ userId }) => {
 
   const EntryModal = ({ entry, onClose }) => {
     if (!entry) return null;
+    
     return (
-      <div className="fixed inset-0 bg-gradient-to-r from-indigo-600 via-purple-600 to-indigo-800 flex items-center justify-center p-4 z-50">
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
         <div className="bg-white rounded-lg max-w-4xl max-h-screen overflow-y-auto w-full">
           <div className="p-6">
             <div className="flex justify-between items-start mb-4">
@@ -105,6 +118,7 @@ const EntryList = ({ userId }) => {
                 ×
               </button>
             </div>
+            
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 text-sm">
               <div>
                 <span className="font-medium text-gray-700">Category:</span>
@@ -125,12 +139,14 @@ const EntryList = ({ userId }) => {
                 <span className="ml-2">{formatDate(entry.submissionDate)}</span>
               </div>
             </div>
+            
             {entry.description && (
               <div className="mb-4">
                 <h3 className="font-medium text-gray-700 mb-2">Description</h3>
                 <p className="text-gray-600 bg-gray-50 p-3 rounded-md">{entry.description}</p>
               </div>
             )}
+            
             {entry.entryType === 'text' && entry.textContent && (
               <div className="mb-4">
                 <h3 className="font-medium text-gray-700 mb-2">Content</h3>
@@ -142,11 +158,12 @@ const EntryList = ({ userId }) => {
                 </p>
               </div>
             )}
+            
             {entry.entryType === 'pitch-deck' && entry.fileUrl && (
               <div className="mb-4">
                 <h3 className="font-medium text-gray-700 mb-2">Pitch Deck</h3>
                 <a
-                  href= {API_BASE_URL + entry.fileUrl}
+                  href={API_BASE_URL + entry.fileUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -155,6 +172,7 @@ const EntryList = ({ userId }) => {
                 </a>
               </div>
             )}
+            
             {entry.entryType === 'video' && entry.videoUrl && (
               <div className="mb-4">
                 <h3 className="font-medium text-gray-700 mb-2">Video</h3>
@@ -168,6 +186,7 @@ const EntryList = ({ userId }) => {
                 </a>
               </div>
             )}
+            
             <div className="bg-gray-50 p-4 rounded-md border">
               <h3 className="font-medium text-gray-700 mb-2">Payment Details</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
@@ -195,6 +214,7 @@ const EntryList = ({ userId }) => {
                 </div>
               </div>
             </div>
+            
             <div className="mt-6 flex justify-end">
               <button
                 onClick={onClose}
@@ -231,6 +251,7 @@ const EntryList = ({ userId }) => {
           </div>
           <h2 className="text-2xl font-bold text-gray-900 mb-4">Error Loading Entries</h2>
           <p className="text-gray-600 mb-6">{error}</p>
+          <p className="text-xs text-gray-500 mb-4">API URL: {API_BASE_URL}</p>
           <button
             onClick={fetchEntries}
             className="bg-blue-600 text-white px-6 py-2 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -256,10 +277,9 @@ const EntryList = ({ userId }) => {
           <p className="text-gray-500">Submit your first entry to get started!</p>
           <div className="mt-6">
             <p className="text-sm text-blue-600">
-              💡 <strong>Tip:</strong> Try creating a test entry using Stripe test card: 
-              4242 4242 4242 4242
-             
+              💡 <strong>Tip:</strong> Try creating a test entry using Stripe test card: 4242 4242 4242 4242
             </p>
+            <p className="text-xs text-gray-500 mt-2">API URL: {API_BASE_URL}</p>
           </div>
         </div>
       </div>
@@ -278,6 +298,7 @@ const EntryList = ({ userId }) => {
             🔄 Refresh
           </button>
         </div>
+        
         <div className="space-y-4">
           {entries.map((entry) => (
             <div
@@ -303,9 +324,11 @@ const EntryList = ({ userId }) => {
                   <span className="text-sm font-medium text-green-600">${entry.totalAmount.toFixed(2)}</span>
                 </div>
               </div>
+              
               {entry.description && (
                 <p className="text-gray-600 text-sm mb-4 line-clamp-2">{entry.description}</p>
               )}
+              
               <div className="flex justify-between items-center text-sm">
                 <div className="flex items-center gap-4">
                   {entry.entryType === 'text' && (
@@ -314,7 +337,7 @@ const EntryList = ({ userId }) => {
                     </span>
                   )}
                   {entry.entryType === 'pitch-deck' && (
-                    <span className="text-blue-600">📁 File uploaded</span>
+                    <span className="text-blue-600">📎 File uploaded</span>
                   )}
                   {entry.entryType === 'video' && (
                     <span className="text-red-600">🎥 Video linked</span>
@@ -331,7 +354,7 @@ const EntryList = ({ userId }) => {
                   </div>
                   <button
                     onClick={(e) => {
-                      e.stopPropagation(); // Prevent triggering the card click
+                      e.stopPropagation();
                       handleDeleteEntry(entry._id);
                     }}
                     className="text-red-600 hover:text-red-800 font-medium flex items-center"
@@ -350,4 +373,3 @@ const EntryList = ({ userId }) => {
 };
 
 export default EntryList;
-
