@@ -1,4 +1,5 @@
 import express from "express";
+import cors from "cors";
 import bodyParser from "body-parser";
 import multer from "multer";
 import path from "path";
@@ -24,32 +25,33 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-// ✅ CORS middleware (dynamic for localhost + vercel.app)
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
+// ✅ Allowed origins
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://alatree-ventures-assignments-cehr.vercel.app",
+  "https://alatree-ventures-assignments-cehr-3h3iawj50-ovezeeees-projects.vercel.app",
+];
 
-  if (
-    origin &&
-    (origin.includes("localhost") || origin.includes("vercel.app"))
-  ) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-  }
-
-  res.setHeader(
-    "Access-Control-Allow-Methods",
-    "GET, POST, PUT, DELETE, PATCH, OPTIONS"
-  );
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    "X-Requested-With, Content-Type, Authorization, Stripe-Signature"
-  );
-
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
-
-  next();
-});
+// ✅ CORS middleware
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.includes(origin) || origin.includes("vercel.app")) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: [
+      "X-Requested-With",
+      "Content-Type",
+      "Authorization",
+      "Stripe-Signature",
+    ],
+    credentials: true,
+  })
+);
 
 // ✅ Stripe webhook BEFORE express.json()
 app.post(
