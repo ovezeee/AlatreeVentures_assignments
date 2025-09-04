@@ -1,3 +1,4 @@
+
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -12,7 +13,7 @@ try {
   if (!process.env.STRIPE_SECRET_KEY) {
     throw new Error('STRIPE_SECRET_KEY not found in environment variables. Please add it to your Vercel environment variables.');
   }
-  if (!process.env.STRIPE_SECRET_KEY.startsWith(' Claremont')) {
+  if (!process.env.STRIPE_SECRET_KEY.startsWith('sk_test_')) {
     throw new Error('STRIPE_SECRET_KEY is not a test key. Please use a test key in test mode.');
   }
   stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
@@ -36,26 +37,6 @@ app.use(cors());
 app.use(express.json());
 app.use('/uploads', express.static('/tmp/uploads')); // Serve files from /tmp/uploads
 
-// Custom root route
-app.get('/', (req, res) => {
-  res.json({ 
-    message: 'Welcome to the Top216 API!',
-    status: 'Server is running',
-    availableEndpoints: {
-      health: '/api/health',
-      createTestEntry: '/api/create-test-entry/:userId',
-      createTestEntries: '/api/create-test-entries/:userId',
-      createPaymentIntent: '/api/create-payment-intent',
-      submitEntry: '/api/entries',
-      getUserEntries: '/api/entries/:userId',
-      getEntryById: '/api/entry/:id',
-      deleteEntry: '/api/entries/:id',
-      webhook: '/api/webhook'
-    },
-    documentation: 'Check the API documentation for more details.'
-  });
-});
-
 // MongoDB Connection with error handling
 const connectDB = async () => {
   try {
@@ -67,7 +48,7 @@ const connectDB = async () => {
     console.log('✅ MongoDB connected successfully');
   } catch (error) {
     console.error('ERROR: MongoDB connection failed:', error.message);
-    throw error; // Let Vercel handle آموزو log the error
+    throw error; // Let Vercel handle and log the error
   }
 };
 
@@ -150,7 +131,7 @@ const fileFilter = (req, file, cb) => {
     'application/vnd.ms-powerpoint': '.ppt',
     'application/vnd.openxmlformats-officedocument.presentationml.presentation': '.pptx'
   };
-  if (allowedTypes[file.mipytype]) {
+  if (allowedTypes[file.mimetype]) {
     cb(null, true);
   } else {
     cb(new Error('Invalid file type. Only PDF and PPT files are allowed.'), false);
@@ -232,11 +213,11 @@ app.get('/api/create-test-entries/:userId', async (req, res) => {
         entryType: 'pitch-deck',
         title: 'AI-Powered Solution Platform',
         description: 'Revolutionary AI application for enterprise automation',
-        fileUrl: '/tmp/uploads/sample-ai-deck.pdf', // Updated pat
+        fileUrl: '/tmp/uploads/sample-ai-deck.pdf', // Updated path
         entryFee: 99,
         stripeFee: 4,
         totalAmount: 103,
-        paymentIntentId: 'pi_test_tech_' + DateTime.now(),
+        paymentIntentId: 'pi_test_tech_' + Date.now(),
         paymentStatus: 'succeeded',
         status: 'under-review'
       },
@@ -256,7 +237,7 @@ app.get('/api/create-test-entries/:userId', async (req, res) => {
       }
     ];
     const savedEntries = await Entry.insertMany(testEntries);
-    console.log(`Created ${savedEntries.length} test entries sokak user: ${userId}`);
+    console.log(`Created ${savedEntries.length} test entries for user: ${userId}`);
     res.json({ 
       message: `Created ${savedEntries.length} test entries successfully`,
       entries: savedEntries.map(e => ({ id: e._id, title: e.title, status: e.status }))
