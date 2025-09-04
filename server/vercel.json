@@ -8,8 +8,7 @@
   "routes": [
     {
       "src": "/(.*)",
-      "dest": "server.js",
-      "methods": ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
+      "dest": "server.js"
     }
   ],
   "headers": [
@@ -18,7 +17,7 @@
       "headers": [
         {
           "key": "Access-Control-Allow-Origin",
-          "value": "https://alatree-ventures-assignments-cehr-av59bl81q-ovezeeees-projects.vercel.app"
+          "value": "*"
         },
         {
           "key": "Access-Control-Allow-Methods",
@@ -26,24 +25,7 @@
         },
         {
           "key": "Access-Control-Allow-Headers",
-          "value": "X-Requested-With, Content-Type, Authorization"
-        }
-      ]
-    },
-    {
-      "source": "/api/(.*)",
-      "headers": [
-        {
-          "key": "Access-Control-Allow-Origin",
-          "value": "https://alatree-ventures-assignments-cehr-nr677mvdd-ovezeeees-projects.vercel.app"
-        },
-        {
-          "key": "Access-Control-Allow-Methods",
-          "value": "GET, POST, PUT, DELETE, PATCH, OPTIONS"
-        },
-        {
-          "key": "Access-Control-Allow-Headers",
-          "value": "X-Requested-With, Content-Type, Authorization"
+          "value": "X-Requested-With, Content-Type, Authorization, Stripe-Signature"
         }
       ]
     }
