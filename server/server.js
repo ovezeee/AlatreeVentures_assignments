@@ -10,41 +10,52 @@ require('dotenv').config();
 let stripe;
 try {
   if (!process.env.STRIPE_SECRET_KEY) {
-    throw new Error('STRIPE_SECRET_KEY not found in environment variables. Please add it to your Vercel environment variables.');
+    throw new Error('STRIPE_SECRET_KEY not found in environment variables.');
   }
   if (!process.env.STRIPE_SECRET_KEY.startsWith('sk_test_')) {
-    throw new Error('STRIPE_SECRET_KEY is not a test key. Please use a test key in test mode.');
+    throw new Error('STRIPE_SECRET_KEY is not a test key.');
   }
   stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
   console.log('✅ Stripe initialized successfully in test mode');
 } catch (error) {
   console.error('ERROR: Failed to initialize Stripe:', error.message);
-  throw error; // Let Vercel handle and log the error
+  throw error;
 }
 
 const app = express();
 
-// Create uploads directory in /tmp if it doesn't exist (Vercel-compatible)
+// Create uploads directory in /tmp (Vercel-compatible)
 const uploadsDir = '/tmp/uploads';
 if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
+  fs.mkdirSync(UploadsDir, { recursive: true });
   console.log('✅ Created uploads directory in /tmp');
 }
 
-// Middleware
+// CORS configuration
+const allowedOrigins = [
+  'https://alatree-ventures-assignments-cehr-av59bl81q-ovezeeees-projects.vercel.app',
+  'https://alatree-ventures-assignments-cehr-nr677mvdd-ovezeeees-projects.vercel.app',
+  'http://localhost:5173' // For local development
+];
 app.use((req, res, next) => {
-  console.log(`Received ${req.method} request to ${req.url} from origin: ${req.headers.origin}`);
+  const origin = req.headers.origin;
+  console.log(`Received ${req.method} request to ${req.url} from origin: ${origin}`);
+  if (allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'X-Requested-With, Content-Type, Authorization');
+  }
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
   next();
 });
-app.use(cors({
-  origin: 'https://alatree-ventures-assignments-cehr-nr677mvdd-ovezeeees-projects.vercel.app',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
-app.use(express.json());
-app.use('/uploads', express.static('/tmp/uploads')); // Serve files from /tmp/uploads
 
-// MongoDB Connection with error handling
+// Middleware
+app.use(express.json());
+app.use('/uploads', express.static('/tmp/uploads'));
+
+// MongoDB Connection
 const connectDB = async () => {
   try {
     const mongoURI = process.env.MONGODB_URI || 'mongodb://localhost:27017/top216';
@@ -55,14 +66,12 @@ const connectDB = async () => {
     console.log('✅ MongoDB connected successfully');
   } catch (error) {
     console.error('ERROR: MongoDB connection failed:', error.message);
-    throw error; // Let Vercel handle and log the error
+    throw error;
   }
 };
 
-// Initialize DB connection
 connectDB().catch((error) => {
   console.error('Failed to connect to MongoDB:', error.message);
-  // Continue running to allow health checks or other routes to respond
 });
 
 // Entry Schema
@@ -124,7 +133,7 @@ const Entry = mongoose.model('Entry', entrySchema);
 // File upload configuration
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, '/tmp/uploads/'); // Use /tmp for Vercel
+    cb(null, '/tmp/uploads/');
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -147,13 +156,13 @@ const fileFilter = (req, file, cb) => {
 
 const upload = multer({
   storage: storage,
-  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB limit
+  limits: { fileSize: 25 * 1024 * 1024 },
   fileFilter: fileFilter
 });
 
 // Helper function to calculate fees
 const calculateFees = (baseAmount) => {
-  const stripeFee = Math.ceil(baseAmount * 0.04); // 4% fee, rounded up
+  const stripeFee = Math.ceil(baseAmount * 0.04);
   const totalAmount = baseAmount + stripeFee;
   return { stripeFee, totalAmount };
 };
@@ -301,7 +310,6 @@ app.post('/api/entries', upload.single('file'), async (req, res) => {
     });
     const { userId, category, entryType, title, description, textContent, videoUrl, paymentIntentId } = req.body;
     
-    // Validate required fields
     if (!userId || !category || !entryType || !title || !paymentIntentId) {
       return res.status(400).json({ 
         error: 'Missing required fields',
@@ -310,7 +318,6 @@ app.post('/api/entries', upload.single('file'), async (req, res) => {
       });
     }
 
-    // Server-side file validation for pitch-deck
     if (entryType === 'pitch-deck') {
       if (!req.file) {
         return res.status(400).json({ error: 'File required for pitch-deck entries' });
