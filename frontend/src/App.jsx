@@ -108,20 +108,7 @@ function App() {
                       My Entries
                     </button>
                   </div>
-                  <div className="flex space-x-2 mt-4 md:mt-0">
-                    <button
-                      onClick={handleCreateTestEntry}
-                      className="px-3 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700"
-                    >
-                      Create Test Entry
-                    </button>
-                    <button
-                      onClick={handleCreateMultipleTestEntries}
-                      className="px-3 py-1 bg-orange-600 text-white text-xs rounded hover:bg-orange-700"
-                    >
-                      Create Multiple Test Entries
-                    </button>
-                  </div>
+                 
                 </div>
               </nav>
             </div>
