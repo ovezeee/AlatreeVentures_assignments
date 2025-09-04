@@ -1,4 +1,4 @@
-// api/index.js - Main serverless function entry point
+// server.js - Main serverless function entry point
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
