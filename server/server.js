@@ -3,29 +3,36 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
-require('dotenv').config();
 
 const app = express();
+
+// Environment variables check
+console.log('Environment check:', {
+  NODE_ENV: process.env.NODE_ENV,
+  MONGODB_URI: process.env.MONGODB_URI ? 'Set' : 'Not set',
+  STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY ? 'Set' : 'Not set',
+});
 
 // Initialize Stripe with fallback
 let stripe;
 try {
   if (!process.env.STRIPE_SECRET_KEY) {
-    throw new Error('STRIPE_SECRET_KEY not found in environment variables');
+    console.warn('STRIPE_SECRET_KEY not found in environment variables');
+    stripe = null;
+  } else {
+    stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+    console.log('✅ Stripe initialized successfully');
   }
-  if (!process.env.STRIPE_SECRET_KEY.startsWith('sk_test_')) {
-    throw new Error('STRIPE_SECRET_KEY is not a test key');
-  }
-  stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-  console.log('✅ Stripe initialized successfully in test mode');
 } catch (error) {
   console.error('ERROR: Failed to initialize Stripe:', error.message);
   stripe = null;
 }
 
-// CORS configuration
+// CORS configuration - More restrictive for production
 const corsOptions = {
-  origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
+  origin: process.env.NODE_ENV === 'production' 
+    ? (process.env.ALLOWED_ORIGINS?.split(',') || ['https://your-frontend-domain.com'])
+    : '*',
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'stripe-signature']
@@ -33,29 +40,82 @@ const corsOptions = {
 
 // Middleware
 app.use(cors(corsOptions));
+
+// Webhook needs raw body, so handle it before JSON parsing
+app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  try {
+    if (!stripe) {
+      return res.status(500).json({ error: 'Stripe not initialized' });
+    }
+
+    const sig = req.headers['stripe-signature'];
+    
+    if (!process.env.STRIPE_WEBHOOK_SECRET) {
+      return res.status(500).json({ error: 'STRIPE_WEBHOOK_SECRET not configured' });
+    }
+
+    const event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+    
+    if (event.type === 'payment_intent.payment_failed') {
+      await connectDB();
+      const paymentIntent = event.data.object;
+      await Entry.findOneAndUpdate(
+        { paymentIntentId: paymentIntent.id },
+        { paymentStatus: 'failed' }
+      );
+      console.log('Updated payment status to failed for paymentIntent:', paymentIntent.id);
+    }
+    
+    res.json({ received: true });
+  } catch (error) {
+    console.error('Webhook error:', error);
+    res.status(400).json({ error: 'Webhook signature verification failed' });
+  }
+});
+
+// JSON parsing for other routes
 app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
 
 // Handle preflight OPTIONS requests
 app.options('*', cors(corsOptions));
 
-// MongoDB Connection with retry logic
+// MongoDB Connection with improved error handling
+let cachedConnection = null;
+
 const connectDB = async () => {
   try {
-    if (mongoose.connection.readyState === 1) {
-      console.log('✅ Using existing MongoDB connection');
-      return;
+    // Use cached connection if available
+    if (cachedConnection && mongoose.connection.readyState === 1) {
+      console.log('✅ Using cached MongoDB connection');
+      return cachedConnection;
     }
     
-    const mongoURI = process.env.MONGODB_URI || 'mongodb://localhost:27017/top216';
-    await mongoose.connect(mongoURI, {
+    const mongoURI = process.env.MONGODB_URI;
+    if (!mongoURI) {
+      throw new Error('MONGODB_URI environment variable is not set');
+    }
+
+    // Close existing connection if any
+    if (mongoose.connection.readyState !== 0) {
+      await mongoose.disconnect();
+    }
+    
+    const connection = await mongoose.connect(mongoURI, {
       useNewUrlParser: true,
       useUnifiedTopology: true,
       serverSelectionTimeoutMS: 5000,
-      maxPoolSize: 10,
+      maxPoolSize: 5, // Reduced for serverless
+      bufferCommands: false,
+      bufferMaxEntries: 0,
     });
+    
+    cachedConnection = connection;
     console.log('✅ MongoDB connected successfully');
+    return connection;
   } catch (error) {
     console.error('ERROR: MongoDB connection failed:', error.message);
+    cachedConnection = null;
     throw new Error(`MongoDB connection failed: ${error.message}`);
   }
 };
@@ -80,9 +140,8 @@ const entrySchema = new mongoose.Schema({
       message: 'Text entries must be between 100-2000 words'
     }
   },
-  // Store file as base64 or cloud storage URL for serverless compatibility
   fileData: {
-    type: String, // Base64 encoded file content
+    type: String,
     validate: {
       validator: function (v) {
         if (this.entryType === 'pitch-deck') {
@@ -93,8 +152,8 @@ const entrySchema = new mongoose.Schema({
       message: 'File data required for pitch deck entries'
     }
   },
-  fileName: String, // Original filename
-  fileMimeType: String, // File MIME type
+  fileName: String,
+  fileMimeType: String,
   videoUrl: {
     type: String,
     validate: {
@@ -117,7 +176,8 @@ const entrySchema = new mongoose.Schema({
   status: { type: String, enum: ['submitted', 'under-review', 'finalist', 'winner', 'rejected'], default: 'submitted' }
 }, { timestamps: true });
 
-const Entry = mongoose.model('Entry', entrySchema);
+// Prevent model re-compilation in serverless environments
+const Entry = mongoose.models.Entry || mongoose.model('Entry', entrySchema);
 
 // Configure multer for memory storage (serverless compatible)
 const storage = multer.memoryStorage();
@@ -160,7 +220,8 @@ app.get('/api/health', asyncHandler(async (req, res) => {
     message: 'Server is running',
     timestamp: new Date().toISOString(),
     stripeInitialized: !!stripe,
-    mongoConnected: mongoose.connection.readyState === 1
+    mongoConnected: mongoose.connection.readyState === 1,
+    environment: process.env.NODE_ENV || 'development'
   };
   console.log('Health check:', status);
   res.json(status);
@@ -169,19 +230,21 @@ app.get('/api/health', asyncHandler(async (req, res) => {
 app.get('/api/create-test-entry/:userId', asyncHandler(async (req, res) => {
   await connectDB();
   const userId = req.params.userId;
+  
   const entry = new Entry({
     userId,
     category: 'business',
     entryType: 'text',
     title: 'Sample Business Strategy Entry',
     description: 'A comprehensive business strategy for digital transformation in modern enterprises',
-    textContent: 'This is a detailed business strategy focusing on digital transformation in modern enterprises. The strategy encompasses multiple aspects of organizational change, technology adoption, and market positioning. It addresses the challenges of legacy system migration, workforce adaptation, and competitive differentiation in an increasingly digital marketplace. The approach emphasizes customer-centric design, agile methodologies, and data-driven decision making to ensure sustainable growth and market leadership.'.repeat(2),
+    textContent: 'This is a detailed business strategy focusing on digital transformation in modern enterprises. The strategy encompasses multiple aspects of organizational change, technology adoption, and market positioning. It addresses the challenges of legacy system migration, workforce adaptation, and competitive differentiation in an increasingly digital marketplace. The approach emphasizes customer-centric design, agile methodologies, and data-driven decision making to ensure sustainable growth and market leadership. '.repeat(3),
     entryFee: 49,
     stripeFee: 2,
     totalAmount: 51,
     paymentIntentId: 'pi_test_' + Date.now(),
     paymentStatus: 'succeeded'
   });
+  
   await entry.save();
   console.log('Test entry created:', entry._id);
   res.json({ 
@@ -191,77 +254,26 @@ app.get('/api/create-test-entry/:userId', asyncHandler(async (req, res) => {
   });
 }));
 
-app.get('/api/create-test-entries/:userId', asyncHandler(async (req, res) => {
-  await connectDB();
-  const userId = req.params.userId;
-  const testEntries = [
-    {
-      userId,
-      category: 'business',
-      entryType: 'text',
-      title: 'Innovative Business Strategy',
-      description: 'A comprehensive business strategy for modern markets',
-      textContent: 'This business strategy focuses on digital transformation in the modern marketplace. It encompasses comprehensive market analysis, competitive positioning, and strategic roadmap development. The approach integrates customer experience optimization, operational efficiency improvements, and technology-driven innovation to create sustainable competitive advantages. Key focus areas include digital channel optimization, data analytics implementation, and agile organizational transformation. The strategy addresses market disruption challenges while identifying new growth opportunities through strategic partnerships and emerging technology adoption.'.repeat(2),
-      entryFee: 49,
-      stripeFee: 2,
-      totalAmount: 51,
-      paymentIntentId: 'pi_test_business_' + Date.now(),
-      paymentStatus: 'succeeded',
-      status: 'submitted'
-    },
-    {
-      userId,
-      category: 'technology',
-      entryType: 'pitch-deck',
-      title: 'AI-Powered Solution Platform',
-      description: 'Revolutionary AI application for enterprise automation',
-      fileData: 'data:application/pdf;base64,JVBERi0xLjQKJcOkw7zDtsO8CjIgMCBvYmoKPDwKL0xlbmd0aCAzIDAgUgo+PgpzdHJlYW0KQNC/wqfDtsKyw6bCp8Ozw7bDvMOkw7zDvsO4w7bCqsOkw7zDtsKuw6fCqcK6w7LDuMOsw7bCtcKqw7XCtcOkw7fCusO3w7bCtcKqw7XCusOzw7bCrcKqw6vCusO3w7bDusK8w7bCtcO7w7bDvMOsw7bCrcKqw6vDusOzw6jCvMO8w7bCtcKqw7XCtcOzw7bDtcO7w7bDuMK8w6fCqcK6w7LDtMOqw7bCtcK6w7bCtcOzw6bCqMK7w7bCtcK6w7fCusOzw7bCtcO7w7bDtcOmwqjCu8K6w6fCusOzw7bCrsKqw6vCusOzCmVuZHN0cmVhbQplbmRvYmoKCjMgMCBvYmoKMzUKZW5kb2JqCgo0IDAgb2JqCjw8Ci9UeXBlIC9QYWdlCi9QYXJlbnQgMSAwIFIKL01lZGlhQm94IFswIDAgNjEyIDc5Ml0KL0NvbnRlbnRzIDIgMCBSCj4+CmVuZG9iagoKMSAwIG9iago8PAovVHlwZSAvUGFnZXMKL0tpZHMgWzQgMCBSXQovQ291bnQgMQo+PgplbmRvYmoKCjUgMCBvYmoKPDwKL1R5cGUgL0NhdGFsb2cKL1BhZ2VzIDEgMCBSCj4+CmVuZG9iagoKeHJlZgowIDYKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMTczIDAwMDAwIG4gCjAwMDAwMDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA4MyAwMDAwMCBuIAowMDAwMDAwMTAzIDAwMDAwIG4gCjAwMDAwMDAyMjkgMDAwMDAgbiAKdHJhaWxlcgo8PAovU2l6ZSA2Ci9Sb290IDUgMCBSCj4+CnN0YXJ0eHJlZgoyNzgKJSVFT0YK',
-      fileName: 'ai-solution-pitch.pdf',
-      fileMimeType: 'application/pdf',
-      entryFee: 99,
-      stripeFee: 4,
-      totalAmount: 103,
-      paymentIntentId: 'pi_test_tech_' + Date.now(),
-      paymentStatus: 'succeeded',
-      status: 'under-review'
-    },
-    {
-      userId,
-      category: 'creative',
-      entryType: 'video',
-      title: 'Creative Digital Showcase',
-      description: 'Artistic expression through innovative digital media',
-      videoUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
-      entryFee: 49,
-      stripeFee: 2,
-      totalAmount: 51,
-      paymentIntentId: 'pi_test_creative_' + Date.now(),
-      paymentStatus: 'succeeded',
-      status: 'finalist'
-    }
-  ];
-  const savedEntries = await Entry.insertMany(testEntries);
-  console.log(`Created ${savedEntries.length} test entries for user: ${userId}`);
-  res.json({ 
-    message: `Created ${savedEntries.length} test entries successfully`,
-    entries: savedEntries.map(e => ({ id: e._id, title: e.title, status: e.status }))
-  });
-}));
-
 app.post('/api/create-payment-intent', asyncHandler(async (req, res) => {
   if (!stripe) {
-    throw new Error('Stripe is not initialized. Check STRIPE_SECRET_KEY configuration.');
+    return res.status(500).json({ 
+      error: 'Stripe is not initialized. Check STRIPE_SECRET_KEY configuration.' 
+    });
   }
+  
   console.log('Payment intent request received:', req.body);
   const { category, entryType } = req.body;
+  
   if (!category || !entryType) {
     return res.status(400).json({ 
       error: 'Category and entryType are required',
       received: { category, entryType }
     });
   }
+  
   const baseFees = { 'business': 49, 'creative': 49, 'technology': 99, 'social-impact': 49 };
   const entryFee = baseFees[category];
+  
   if (!entryFee) {
     return res.status(400).json({ 
       error: 'Invalid category',
@@ -269,23 +281,38 @@ app.post('/api/create-payment-intent', asyncHandler(async (req, res) => {
       received: category
     });
   }
+  
   const { stripeFee, totalAmount } = calculateFees(entryFee);
   console.log('Creating payment intent with amount:', totalAmount * 100, 'cents');
+  
   const paymentIntent = await stripe.paymentIntents.create({
     amount: totalAmount * 100,
     currency: 'usd',
-    metadata: { category, entryType, entryFee: entryFee.toString(), stripeFee: stripeFee.toString() }
+    metadata: { 
+      category, 
+      entryType, 
+      entryFee: entryFee.toString(), 
+      stripeFee: stripeFee.toString() 
+    }
   });
+  
   console.log('Payment intent created successfully:', paymentIntent.id);
-  res.json({ clientSecret: paymentIntent.client_secret, entryFee, stripeFee, totalAmount });
+  res.json({ 
+    clientSecret: paymentIntent.client_secret, 
+    entryFee, 
+    stripeFee, 
+    totalAmount 
+  });
 }));
 
 app.post('/api/entries', upload.single('file'), asyncHandler(async (req, res) => {
   await connectDB();
+  
   console.log('Entry submission received:', {
-    body: req.body,
+    body: { ...req.body, textContent: req.body.textContent ? '[TEXT_CONTENT]' : undefined },
     file: req.file ? { filename: req.file.originalname, size: req.file.size } : null
   });
+  
   const { userId, category, entryType, title, description, textContent, videoUrl, paymentIntentId } = req.body;
   
   // Validate required fields
@@ -293,7 +320,7 @@ app.post('/api/entries', upload.single('file'), asyncHandler(async (req, res) =>
     return res.status(400).json({ 
       error: 'Missing required fields',
       required: ['userId', 'category', 'entryType', 'title', 'paymentIntentId'],
-      received: { userId, category, entryType, title, paymentIntentId }
+      received: { userId: !!userId, category: !!category, entryType: !!entryType, title: !!title, paymentIntentId: !!paymentIntentId }
     });
   }
 
@@ -316,19 +343,23 @@ app.post('/api/entries', upload.single('file'), asyncHandler(async (req, res) =>
   }
 
   if (!stripe) {
-    throw new Error('Stripe is not initialized. Check STRIPE_SECRET_KEY configuration.');
+    return res.status(500).json({ error: 'Stripe is not initialized' });
   }
+
   console.log('Verifying payment intent:', paymentIntentId);
   const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+  
   if (paymentIntent.status !== 'succeeded') {
     return res.status(400).json({ 
       error: 'Payment not completed',
       paymentStatus: paymentIntent.status
     });
   }
+
   const entryFee = parseInt(paymentIntent.metadata.entryFee);
   const stripeFee = parseInt(paymentIntent.metadata.stripeFee);
   const totalAmount = entryFee + stripeFee;
+
   const entryData = {
     userId,
     category,
@@ -354,34 +385,40 @@ app.post('/api/entries', upload.single('file'), asyncHandler(async (req, res) =>
   }
   
   console.log('Creating entry with data:', { ...entryData, fileData: entryData.fileData ? '[FILE_DATA]' : undefined });
+  
   const entry = new Entry(entryData);
   await entry.save();
+  
   console.log('Entry created successfully:', entry._id);
   res.status(201).json({ message: 'Entry submitted successfully', entryId: entry._id });
 }));
 
 app.get('/api/entries/:userId', asyncHandler(async (req, res) => {
   await connectDB();
+  
   console.log('Fetching entries for user:', req.params.userId);
   const entries = await Entry.find({ userId: req.params.userId })
     .select('-fileData') // Exclude large file data from list view
     .sort({ createdAt: -1 });
+    
   console.log(`Found ${entries.length} entries for user:`, req.params.userId);
   res.json(entries);
 }));
 
 app.get('/api/entry/:id', asyncHandler(async (req, res) => {
   await connectDB();
+  
   const entry = await Entry.findById(req.params.id);
   if (!entry) {
     return res.status(404).json({ error: 'Entry not found' });
   }
+  
   res.json(entry);
 }));
 
-// New endpoint to download files (converts base64 back to file)
 app.get('/api/entry/:id/download', asyncHandler(async (req, res) => {
   await connectDB();
+  
   const entry = await Entry.findById(req.params.id);
   if (!entry) {
     return res.status(404).json({ error: 'Entry not found' });
@@ -391,19 +428,26 @@ app.get('/api/entry/:id/download', asyncHandler(async (req, res) => {
     return res.status(404).json({ error: 'No file associated with this entry' });
   }
   
-  // Extract base64 data
-  const base64Data = entry.fileData.split(',')[1];
-  const buffer = Buffer.from(base64Data, 'base64');
-  
-  res.setHeader('Content-Type', entry.fileMimeType);
-  res.setHeader('Content-Disposition', `attachment; filename="${entry.fileName}"`);
-  res.send(buffer);
+  try {
+    // Extract base64 data
+    const base64Data = entry.fileData.split(',')[1];
+    const buffer = Buffer.from(base64Data, 'base64');
+    
+    res.setHeader('Content-Type', entry.fileMimeType);
+    res.setHeader('Content-Disposition', `attachment; filename="${entry.fileName}"`);
+    res.send(buffer);
+  } catch (error) {
+    console.error('Error processing file download:', error);
+    res.status(500).json({ error: 'Error processing file download' });
+  }
 }));
 
 app.delete('/api/entries/:id', asyncHandler(async (req, res) => {
   await connectDB();
+  
   const entryId = req.params.id;
   const { userId } = req.body;
+  
   console.log('Deleting entry:', entryId, 'for user:', userId);
   
   const entry = await Entry.findById(entryId);
@@ -421,28 +465,6 @@ app.delete('/api/entries/:id', asyncHandler(async (req, res) => {
   res.json({ message: 'Entry deleted successfully' });
 }));
 
-app.post('/api/webhook', express.raw({ type: 'application/json' }), asyncHandler(async (req, res) => {
-  const sig = req.headers['stripe-signature'];
-  
-  if (!process.env.STRIPE_WEBHOOK_SECRET) {
-    throw new Error('STRIPE_WEBHOOK_SECRET not configured');
-  }
-  if (!stripe) {
-    throw new Error('Stripe is not initialized');
-  }
-  const event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
-  if (event.type === 'payment_intent.payment_failed') {
-    await connectDB();
-    const paymentIntent = event.data.object;
-    await Entry.findOneAndUpdate(
-      { paymentIntentId: paymentIntent.id },
-      { paymentStatus: 'failed' }
-    );
-    console.log('Updated payment status to failed for paymentIntent:', paymentIntent.id);
-  }
-  res.json({ received: true });
-}));
-
 // Global error handler
 app.use((error, req, res, next) => {
   console.error('Unhandled error:', {
@@ -452,8 +474,24 @@ app.use((error, req, res, next) => {
     method: req.method
   });
   
+  // More specific error handling
+  if (error.name === 'ValidationError') {
+    return res.status(400).json({
+      error: 'Validation Error',
+      message: error.message,
+      details: error.errors
+    });
+  }
+  
+  if (error.name === 'MongoError' || error.name === 'MongooseError') {
+    return res.status(500).json({
+      error: 'Database Error',
+      message: 'Database operation failed'
+    });
+  }
+  
   // Don't expose internal errors in production
-  const isDevelopment = process.env.NODE_ENV === 'development';
+  const isDevelopment = process.env.NODE_ENV !== 'production';
   
   res.status(error.status || 500).json({
     error: isDevelopment ? error.message : 'Internal server error',
@@ -472,5 +510,5 @@ app.use('*', (req, res) => {
   });
 });
 
-// Export for Vercel
+// For serverless environments, export the app
 module.exports = app;
