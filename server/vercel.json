@@ -1,3 +1,4 @@
+
 {
   "version": 2,
   "builds": [
@@ -8,10 +9,15 @@
   ],
   "routes": [
     {
-      "src": "/(.*)",
-      "dest": "server.js"
+      "src": "/api/(.*)",
+      "dest": "/server.js"
     }
   ],
+  "functions": {
+    "server.js": {
+      "maxDuration": 30
+    }
+  },
   "headers": [
     {
       "source": "/api/(.*)",
@@ -22,11 +28,15 @@
         },
         {
           "key": "Access-Control-Allow-Methods",
-          "value": "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+          "value": "GET, POST, PUT, DELETE, OPTIONS"
         },
         {
           "key": "Access-Control-Allow-Headers",
-          "value": "X-Requested-With, Content-Type, Authorization, Stripe-Signature"
+          "value": "Content-Type, Authorization, stripe-signature"
+        },
+        {
+          "key": "Access-Control-Max-Age",
+          "value": "86400"
         }
       ]
     }
