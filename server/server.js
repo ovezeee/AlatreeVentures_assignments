@@ -136,6 +136,11 @@ const calculateFees = (baseAmount) => {
   return { stripeFee, totalAmount };
 };
 
+// Handle preflight OPTIONS requests
+app.options('*', cors(corsOptions));
+
+app.use(express.json());
+
 // Routes
 app.get('/api/health', async (req, res) => {
   try {
